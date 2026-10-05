@@ -1,0 +1,209 @@
+---
+- name: Install OpenSCAP and scan RHEL 8.10 / Ubuntu 26.04
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    report_dir: /var/tmp/openscap
+
+    # Change these if you want a different compliance profile.
+    rhel8_scap_profile: xccdf_org.ssgproject.content_profile_cis_server_l1
+    ubuntu2604_scap_profile: xccdf_org.ssgproject.content_profile_cis_level1_server
+
+  tasks:
+
+    # ============================================================
+    # OS VALIDATION
+    # ============================================================
+
+    - name: Verify supported operating system
+      ansible.builtin.assert:
+        that:
+          - >
+            (
+              ansible_facts.distribution == "RedHat"
+              and ansible_facts.distribution_major_version | int == 8
+              and ansible_facts.distribution_version is version('8.10', '>=')
+            )
+            or
+            (
+              ansible_facts.distribution == "Ubuntu"
+              and ansible_facts.distribution_version is version('26.04', '>=')
+            )
+        fail_msg: >-
+          Unsupported operating system:
+          {{ ansible_facts.distribution }}
+          {{ ansible_facts.distribution_version }}.
+          Supported systems are RHEL 8.10+ (RHEL 8 only)
+          and Ubuntu 26.04+.
+
+    # ============================================================
+    # RHEL 8
+    # ============================================================
+
+    - name: Install OpenSCAP packages on RHEL
+      ansible.builtin.dnf:
+        name:
+          - openscap-scanner
+          - scap-security-guide
+        state: present
+        update_cache: true
+      when:
+        - ansible_facts.distribution == "RedHat"
+
+    - name: Set RHEL SCAP variables
+      ansible.builtin.set_fact:
+        scap_content: /usr/share/xml/scap/ssg/content/ssg-rhel8-ds.xml
+        scap_profile: "{{ rhel8_scap_profile }}"
+        report_file: "{{ report_dir }}/rhel8-openscap-report.html"
+        results_file: "{{ report_dir }}/rhel8-openscap-results.xml"
+      when:
+        - ansible_facts.distribution == "RedHat"
+
+    # ============================================================
+    # UBUNTU 26.04
+    # ============================================================
+
+    - name: Install OpenSCAP packages on Ubuntu
+      ansible.builtin.apt:
+        name:
+          - openscap-scanner
+          - scap-security-guide
+        state: present
+        update_cache: true
+      when:
+        - ansible_facts.distribution == "Ubuntu"
+
+    - name: Set Ubuntu SCAP variables
+      ansible.builtin.set_fact:
+        scap_content: /usr/share/xml/scap/ssg/content/ssg-ubuntu2604-ds.xml
+        scap_profile: "{{ ubuntu2604_scap_profile }}"
+        report_file: "{{ report_dir }}/ubuntu2604-openscap-report.html"
+        results_file: "{{ report_dir }}/ubuntu2604-openscap-results.xml"
+      when:
+        - ansible_facts.distribution == "Ubuntu"
+
+    # ============================================================
+    # COMMON
+    # ============================================================
+
+    - name: Create OpenSCAP report directory
+      ansible.builtin.file:
+        path: "{{ report_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Verify oscap is installed
+      ansible.builtin.command:
+        cmd: oscap --version
+      register: oscap_version
+      changed_when: false
+
+    - name: Display OpenSCAP version
+      ansible.builtin.debug:
+        msg: "{{ oscap_version.stdout }}"
+
+    # ------------------------------------------------------------
+    # Verify SCAP data stream
+    # ------------------------------------------------------------
+
+    - name: Check SCAP content exists
+      ansible.builtin.stat:
+        path: "{{ scap_content }}"
+      register: scap_content_file
+
+    - name: Verify SCAP content exists
+      ansible.builtin.assert:
+        that:
+          - scap_content_file.stat.exists
+          - scap_content_file.stat.isreg
+        fail_msg: >-
+          SCAP content was not found:
+          {{ scap_content }}
+
+    # ------------------------------------------------------------
+    # Verify requested profile exists
+    # ------------------------------------------------------------
+
+    - name: Get available SCAP profiles
+      ansible.builtin.command:
+        cmd: "oscap info {{ scap_content }}"
+      register: scap_info
+      changed_when: false
+
+    - name: Verify requested SCAP profile exists
+      ansible.builtin.assert:
+        that:
+          - scap_profile in scap_info.stdout
+        fail_msg: >-
+          Requested SCAP profile was not found.
+
+          OS:
+          {{ ansible_facts.distribution }}
+          {{ ansible_facts.distribution_version }}
+
+          Data stream:
+          {{ scap_content }}
+
+          Requested profile:
+          {{ scap_profile }}
+
+          Available profiles:
+          {{ scap_info.stdout }}
+
+    # ============================================================
+    # RUN SCAN
+    # ============================================================
+
+    - name: Run OpenSCAP scan
+      ansible.builtin.command:
+        cmd: >
+          oscap xccdf eval
+          --profile {{ scap_profile }}
+          --results {{ results_file }}
+          --report {{ report_file }}
+          {{ scap_content }}
+      register: oscap_scan
+      changed_when: false
+      failed_when: oscap_scan.rc not in [0, 2]
+
+    - name: Display OpenSCAP scan result
+      ansible.builtin.debug:
+        msg:
+          - "Host: {{ inventory_hostname }}"
+          - "OS: {{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}"
+          - "Profile: {{ scap_profile }}"
+          - "OpenSCAP return code: {{ oscap_scan.rc }}"
+          - "Report: {{ report_file }}"
+          - "Results: {{ results_file }}"
+
+    # ============================================================
+    # REPORT
+    # ============================================================
+
+    - name: Check report exists
+      ansible.builtin.stat:
+        path: "{{ report_file }}"
+      register: report_stat
+
+    - name: Verify report was created
+      ansible.builtin.assert:
+        that:
+          - report_stat.stat.exists
+        fail_msg: "OpenSCAP did not create {{ report_file }}"
+
+    - name: Display OpenSCAP report with Lynx
+      ansible.builtin.command:
+        cmd: "lynx -dump {{ report_file }}"
+      register: lynx_report
+      changed_when: false
+      when:
+        - ansible_facts.distribution == "RedHat"
+          or ansible_facts.distribution == "Ubuntu"
+
+    - name: Display OpenSCAP report
+      ansible.builtin.debug:
+        msg: "{{ lynx_report.stdout_lines }}"

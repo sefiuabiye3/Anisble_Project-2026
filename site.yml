@@ -1,0 +1,7 @@
+---
+- name: Harden Ubuntu Servers
+  hosts: ubuntu
+  become: true
+
+  roles:
+    - role: ubuntu_hardening

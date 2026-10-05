@@ -1,0 +1,8 @@
+---
+- name: Stop and disable unnecessary services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+  loop: "{{ unnecessary_services }}"
+  failed_when: false

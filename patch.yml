@@ -1,0 +1,198 @@
+---
+- name: Patch RHEL and Ubuntu servers
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    reboot_timeout: 600
+    patch_reboot: true
+
+  pre_tasks:
+
+    - name: Display server information
+      ansible.builtin.debug:
+        msg:
+          - "Hostname: {{ ansible_hostname }}"
+          - "OS: {{ ansible_distribution }}"
+          - "Version: {{ ansible_distribution_version }}"
+          - "Kernel: {{ ansible_kernel }}"
+          - "Uptime: {{ (ansible_uptime_seconds / 86400) | round(1) }} days"
+
+    - name: Check root filesystem usage
+      ansible.builtin.shell: |
+        df -P / | awk 'NR==2 {print $5}' | tr -d '%'
+      register: root_disk_usage
+      changed_when: false
+
+    - name: Fail if root filesystem is too full
+      ansible.builtin.fail:
+        msg: "Root filesystem usage is {{ root_disk_usage.stdout }}%. Patching aborted."
+      when: root_disk_usage.stdout | int >= 90
+
+    - name: Verify supported operating system
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution in ['RedHat', 'Rocky', 'AlmaLinux', 'OracleLinux', 'Ubuntu']
+        fail_msg: "Unsupported operating system: {{ ansible_distribution }}"
+
+  tasks:
+
+    # ---------------------------------------------------------
+    # RHEL / Rocky / AlmaLinux / Oracle Linux
+    # ---------------------------------------------------------
+
+    - name: RHEL - Check available updates
+      ansible.builtin.dnf:
+        list: updates
+      register: rhel_updates
+      when: ansible_os_family == "RedHat"
+
+    - name: RHEL - Display available updates
+      ansible.builtin.debug:
+        msg: "Available RHEL updates: {{ rhel_updates.results | default([]) | length }}"
+      when: ansible_os_family == "RedHat"
+
+    - name: RHEL - Patch all packages
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        update_only: true
+      register: rhel_patch_result
+      when: ansible_os_family == "RedHat"
+
+    # ---------------------------------------------------------
+    # Ubuntu
+    # ---------------------------------------------------------
+
+    - name: Ubuntu - Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_distribution == "Ubuntu"
+
+    - name: Ubuntu - Check available updates
+      ansible.builtin.shell: |
+        apt list --upgradable 2>/dev/null
+      register: ubuntu_updates
+      changed_when: false
+      when: ansible_distribution == "Ubuntu"
+
+    - name: Ubuntu - Display available updates
+      ansible.builtin.debug:
+        msg: "{{ ubuntu_updates.stdout_lines | default([]) }}"
+      when: ansible_distribution == "Ubuntu"
+
+    - name: Ubuntu - Upgrade packages
+      ansible.builtin.apt:
+        upgrade: dist
+        autoremove: true
+        autoclean: true
+      register: ubuntu_patch_result
+      when: ansible_distribution == "Ubuntu"
+
+    # ---------------------------------------------------------
+    # Determine whether reboot is required
+    # ---------------------------------------------------------
+
+    - name: Check if reboot is required on Ubuntu
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: ubuntu_reboot_required
+      when: ansible_distribution == "Ubuntu"
+
+    - name: Check if reboot is required on RHEL
+      ansible.builtin.shell: |
+        if command -v needs-restarting >/dev/null 2>&1; then
+          needs-restarting -r
+          echo $?
+        else
+          echo "UNKNOWN"
+        fi
+      register: rhel_reboot_required
+      changed_when: false
+      failed_when: false
+      when: ansible_os_family == "RedHat"
+
+    - name: Set reboot requirement
+      ansible.builtin.set_fact:
+        reboot_required: >-
+          {{
+            (ansible_distribution == "Ubuntu" and
+             ubuntu_reboot_required.stat.exists)
+            or
+            (ansible_os_family == "RedHat" and
+             rhel_reboot_required.stdout | trim == "1")
+          }}
+
+    - name: Display reboot status
+      ansible.builtin.debug:
+        msg: "Reboot required: {{ reboot_required }}"
+
+    # ---------------------------------------------------------
+    # Reboot
+    # ---------------------------------------------------------
+
+    - name: Reboot server if required
+      ansible.builtin.reboot:
+        reboot_timeout: "{{ reboot_timeout }}"
+        connect_timeout: 10
+        pre_reboot_delay: 5
+        post_reboot_delay: 20
+        test_command: whoami
+      when:
+        - patch_reboot | bool
+        - reboot_required | bool
+
+    # ---------------------------------------------------------
+    # Post-patch validation
+    # ---------------------------------------------------------
+
+    - name: Gather facts after reboot
+      ansible.builtin.setup:
+
+    - name: Verify server is online
+      ansible.builtin.command: uptime
+      register: uptime_result
+      changed_when: false
+
+    - name: Display new kernel
+      ansible.builtin.debug:
+        msg:
+          - "Hostname: {{ ansible_hostname }}"
+          - "OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "Kernel: {{ ansible_kernel }}"
+          - "Uptime: {{ uptime_result.stdout }}"
+
+    - name: RHEL - Check package manager
+      ansible.builtin.command: dnf check
+      register: rhel_dnf_check
+      changed_when: false
+      failed_when: false
+      when: ansible_os_family == "RedHat"
+
+    - name: Ubuntu - Check dpkg
+      ansible.builtin.command: dpkg --audit
+      register: ubuntu_dpkg_check
+      changed_when: false
+      failed_when: false
+      when: ansible_distribution == "Ubuntu"
+
+    - name: Ubuntu - Verify no reboot is pending
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: final_reboot_check
+      when: ansible_distribution == "Ubuntu"
+
+    - name: Post-patch summary
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "PATCH COMPLETE"
+          - "Host: {{ inventory_hostname }}"
+          - "OS: {{ ansible_distribution }}"
+          - "Version: {{ ansible_distribution_version }}"
+          - "Kernel: {{ ansible_kernel }}"
+          - "Reboot performed: {{ reboot_required and patch_reboot }}"
+          - "========================================="
+

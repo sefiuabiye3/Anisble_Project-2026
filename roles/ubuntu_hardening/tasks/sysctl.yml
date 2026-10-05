@@ -1,0 +1,13 @@
+---
+- name: Configure kernel security parameters
+  ansible.builtin.template:
+    src: security.conf.j2
+    dest: /etc/sysctl.d/99-security.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Apply sysctl configuration
+  ansible.builtin.command:
+    cmd: sysctl --system
+  changed_when: false

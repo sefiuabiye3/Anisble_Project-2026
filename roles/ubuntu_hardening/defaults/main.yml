@@ -1,0 +1,17 @@
+---
+ssh_port: 22
+
+# Keep false until SSH key authentication has been tested
+disable_ssh_password_auth: false
+
+allowed_ssh_users:
+  - ansible
+
+unnecessary_services:
+  - avahi-daemon
+  - cups
+  - bluetooth
+
+password_min_length: 14
+password_min_classes: 4
+password_retry: 3

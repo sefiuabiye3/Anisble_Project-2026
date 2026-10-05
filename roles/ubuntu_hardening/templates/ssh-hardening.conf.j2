@@ -1,0 +1,27 @@
+# SSH Hardening Configuration
+
+Port {{ ssh_port }}
+
+PermitRootLogin no
+
+MaxAuthTries 3
+LoginGraceTime 30
+
+X11Forwarding no
+
+AllowTcpForwarding no
+GatewayPorts no
+
+PermitEmptyPasswords no
+
+ClientAliveInterval 300
+ClientAliveCountMax 2
+
+LogLevel VERBOSE
+
+{% if disable_ssh_password_auth %}
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+{% endif %}
+
+AllowUsers {{ allowed_ssh_users | join(' ') }}
