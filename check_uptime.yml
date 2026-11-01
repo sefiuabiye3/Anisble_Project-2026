@@ -1,0 +1,27 @@
+
+---
+- name: Check Linux Server Uptime
+  hosts: all
+  become: true
+  gather_facts: true
+
+  tasks:
+
+    - name: Get server uptime
+      ansible.builtin.command: uptime
+      register: uptime_result
+      changed_when: false
+
+    - name: Get uptime in seconds
+      ansible.builtin.command: cat /proc/uptime
+      register: uptime_seconds
+      changed_when: false
+
+    - name: Display uptime results
+      ansible.builtin.debug:
+        msg:
+          - "Hostname: {{ inventory_hostname }}"
+          - "IP Address: {{ ansible_host | default(ansible_facts.default_ipv4.address | default('Unknown')) }}"
+          - "Uptime: {{ uptime_result.stdout }}"
+          - "Uptime in seconds: {{ uptime_seconds.stdout.split()[0] }}"
+
