@@ -1,0 +1,51 @@
+
+---
+- name: Install and configure Apache HTTP Server
+  hosts: webservers
+  become: true
+  gather_facts: true
+
+  tasks:
+
+    - name: Install httpd package
+      ansible.builtin.dnf:
+        name: httpd
+        state: present
+
+    - name: Start and enable httpd service
+      ansible.builtin.systemd:
+        name: httpd
+        state: started
+        enabled: true
+
+    - name: Allow HTTP traffic through firewalld
+      ansible.posix.firewalld:
+        service: http
+        permanent: true
+        state: enabled
+        immediate: true
+      when: ansible_facts.services['firewalld.service'] is defined
+
+    - name: Create custom index page
+      ansible.builtin.copy:
+        dest: /var/www/html/index.html
+        content: |
+          <html>
+          <head><title>Ansible Web Server</title></head>
+          <body>
+          <h1>Apache HTTP Server Installed Successfully!</h1>
+          <p>Managed by Ansible Automation Platform.</p>
+          </body>
+          </html>
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Verify httpd service
+      ansible.builtin.command: systemctl is-active httpd
+      register: httpd_status
+      changed_when: false
+
+    - name: Display httpd status
+      ansible.builtin.debug:
+        msg: "HTTPD status: {{ httpd_status.stdout }}"
